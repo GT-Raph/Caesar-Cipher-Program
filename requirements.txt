@@ -1,0 +1,2 @@
+cryptography>=46.0.0,<52
+flet[all]==1.0.3
