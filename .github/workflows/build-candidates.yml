@@ -1,0 +1,38 @@
+name: Build unsigned release candidates
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+          - os: ubuntu-latest
+            target: apk
+          - os: macos-latest
+            target: macos
+          - os: macos-latest
+            target: ios-simulator
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -v
+      - name: Build candidate (not a signed distribution)
+        run: flet build ${{ matrix.target }} --python-version 3.14 --build-version 0.3.0 --build-number 3 --yes --no-rich-output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cipher-vault-${{ matrix.target }}-candidate
+          path: build/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 14

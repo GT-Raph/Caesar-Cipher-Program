@@ -8,6 +8,8 @@ import flet as ft
 
 from . import password_crypto as password_engine
 from . import hybrid_crypto as hybrid_engine
+from .storage import export_new, read_bounded
+from .native_files import save_mobile_bytes
 
 
 class VaultApp:
@@ -20,6 +22,9 @@ class VaultApp:
         self.result_data = None
         self.result_name = 'encrypted.cvlt'
         self.busy = False
+        self.result_saved = True
+        self.saved_keys = set()
+        self.confirming = False
         self.picker = ft.FilePicker()
         self.method = ft.Dropdown(label='Protection', value='password', options=[
             ft.DropdownOption('password', 'Password'), ft.DropdownOption('hybrid', 'Public key (AES + RSA)')], on_select=self.changed)
@@ -68,9 +73,7 @@ class VaultApp:
         ], spacing=18, scroll=ft.ScrollMode.AUTO), padding=20, expand=True), expand=True)
 
     def changed(self, event=None):
-        self.result_data = None
-        self.result.value = ''
-        self.save_button.disabled = True
+        self.save_button.disabled = self.result_data is None
         hybrid = self.method.value == 'hybrid'
         encrypting = self.operation.value == 'encrypt'
         self.message.visible = self.input_kind.value == 'text'
@@ -82,11 +85,58 @@ class VaultApp:
         self.password.label = 'Private-key passphrase (for decryption / key generation)' if hybrid else 'Passphrase'
         self.confirm.visible = encrypting or hybrid
         self.run_button.content = 'Encrypt' if encrypting else 'Decrypt'
-        self.status.value = 'Ready. Changes clear the previous result.'
+        self.status.value = ('Inputs changed. The previous result is still available to save.'
+                             if self.result_data is not None else 'Ready.')
         self.page.update()
 
-    async def guarded(self, action):
+    @property
+    def desktop(self):
+        return self.page.platform in (ft.PagePlatform.WINDOWS, ft.PagePlatform.MACOS, ft.PagePlatform.LINUX)
+
+    @property
+    def unsaved(self):
+        return ((self.result_data is not None and not self.result_saved)
+                or (self.generated_keys is not None and self.saved_keys != {0, 1}))
+
+    async def confirm_discard(self, message):
+        if self.confirming:
+            return False
+        self.confirming = True
+        answer = asyncio.get_running_loop().create_future()
+
+        def finish(value):
+            if not answer.done():
+                answer.set_result(value)
+
+        def respond(value):
+            def handler(event):
+                finish(value)
+                self.page.pop_dialog()
+            return handler
+
+        dialog = ft.AlertDialog(modal=True, title=ft.Text('Discard unsaved work?'),
+            content=ft.Text(message), actions=[ft.TextButton('Keep working', on_click=respond(False)),
+                                             ft.TextButton('Discard', on_click=respond(True))],
+            on_dismiss=lambda event: finish(False))
+        self.page.show_dialog(dialog)
+        try:
+            return await answer
+        finally:
+            self.confirming = False
+
+    async def close_window(self, event):
+        if event.type != ft.WindowEventType.CLOSE:
+            return
         if self.busy:
+            self.status.value = 'Wait for the current operation to finish before closing.'
+            self.page.update()
+            return
+        if self.unsaved and not await self.confirm_discard('Your unsaved result or generated keys will be lost.'):
+            return
+        await self.page.window.destroy()
+
+    async def guarded(self, action):
+        if self.busy or self.confirming:
             return
         self.busy = True
         self.form.disabled = True
@@ -108,13 +158,14 @@ class VaultApp:
             self.page.update()
 
     async def selected_bytes(self, limit):
-        files = await self.picker.pick_files(allow_multiple=False, with_data=True)
+        files = await self.picker.pick_files(allow_multiple=False, with_data=not self.desktop)
         if not files:
             return None
         selected = files[0]
         if selected.size > limit:
-            raise ValueError(f'This file exceeds the {limit // (1024 * 1024)} MiB limit.')
-        data = selected.bytes
+            raise ValueError(f'This file exceeds the {limit:,}-byte limit.')
+        data = (await asyncio.to_thread(read_bounded, selected.path, limit)
+                if self.desktop and selected.path else selected.bytes)
         if data is None:
             raise ValueError('The file provider did not return readable data. Choose a locally available file.')
         if len(data) > limit:
@@ -149,14 +200,18 @@ class VaultApp:
 
     async def process(self, event=None):
         async def work():
+            if self.result_data is not None and not self.result_saved:
+                if not await self.confirm_discard('Running again will replace the unsaved result. Save it first to keep it.'):
+                    return
             self.result_data = None
             self.result.value = ''
             encrypting = self.operation.value == 'encrypt'
             hybrid = self.method.value == 'hybrid'
+            input_kind = self.input_kind.value
             password = self.password.value or ''
             if encrypting and not hybrid and password != self.confirm.value:
                 raise ValueError('The passphrases do not match.')
-            if self.input_kind.value == 'file':
+            if input_kind == 'file':
                 if self.file_data is None:
                     raise ValueError('Choose a file first.')
                 data = self.file_data
@@ -186,8 +241,9 @@ class VaultApp:
                 output = await asyncio.to_thread(fn, data, password)
                 extension = '.cvlt'
             self.result_data = output
+            self.result_saved = False
             self.result_name = name + extension if encrypting else 'decrypted-' + name.removesuffix('.cvlt').removesuffix('.cse')
-            if self.input_kind.value == 'text':
+            if input_kind == 'text':
                 if encrypting:
                     self.result.value = base64.b64encode(output).decode('ascii')
                 else:
@@ -203,9 +259,22 @@ class VaultApp:
     async def save(self, event=None):
         async def work():
             if self.result_data is not None:
-                path = await self.picker.save_file(file_name=self.result_name, src_bytes=self.result_data)
+                path = await self.export(self.result_name, self.result_data)
+                if path:
+                    self.result_saved = True
                 self.status.value = 'Result saved.' if path else 'Save cancelled. The result is still available.'
         await self.guarded(work)
+
+    async def export(self, name, data):
+        if self.desktop:
+            path = await self.picker.save_file(file_name=name, dialog_title='Save to a new filename')
+            if path:
+                try:
+                    await asyncio.to_thread(export_new, path, data)
+                except FileExistsError as error:
+                    raise ValueError('That file already exists. Choose a new filename to protect your original.') from error
+            return path
+        return await save_mobile_bytes(self.picker, name, data)
 
     async def generate(self, event=None):
         async def work():
@@ -215,6 +284,7 @@ class VaultApp:
             if password != self.confirm.value:
                 raise ValueError('Confirm the matching private-key passphrase above.')
             self.generated_keys = await asyncio.to_thread(hybrid_engine.generate_keypair, password)
+            self.saved_keys.clear()
             self.private_button.disabled = self.public_button.disabled = False
             self.status.value = 'Key pair ready. Save BOTH keys. Share only the public key.'
         await self.guarded(work)
@@ -228,11 +298,17 @@ class VaultApp:
     async def export_key(self, index, name):
         async def work():
             if self.generated_keys is not None:
-                path = await self.picker.save_file(file_name=name, src_bytes=self.generated_keys[index])
+                path = await self.export(name, self.generated_keys[index])
+                if path:
+                    self.saved_keys.add(index)
                 self.status.value = f'Saved {name}.' if path else 'Save cancelled. Keys are still available.'
         await self.guarded(work)
 
     async def clear(self, event=None):
+        if self.busy or self.confirming:
+            return
+        if self.unsaved and not await self.confirm_discard('Clearing will discard unsaved results and generated keys.'):
+            return
         self.file_data = self.key_data = self.generated_keys = self.result_data = None
         self.file_name = None
         self.password.value = self.confirm.value = self.message.value = ''
@@ -240,12 +316,18 @@ class VaultApp:
         self.key_label.value = 'No key selected.'
         self.verified.value = False
         self.public_button.disabled = self.private_button.disabled = True
+        self.result.value = ''
+        self.result_saved = True
+        self.saved_keys.clear()
         self.changed()
         self.status.value = 'Workspace cleared.'
         self.page.update()
 
 
 def main(page: ft.Page):
+    if page.web:
+        page.add(ft.Text('Cipher Vault requires native local execution. Launch the desktop or mobile app.'))
+        return
     page.title = 'Cipher Vault'
     page.theme_mode = ft.ThemeMode.LIGHT
     page.theme = ft.Theme(color_scheme_seed='#0f766e', font_family='Segoe UI')
@@ -254,4 +336,7 @@ def main(page: ft.Page):
     page.window.width = 920
     page.window.height = 860
     app = VaultApp(page)
+    if app.desktop:
+        page.window.prevent_close = True
+        page.window.on_event = app.close_window
     page.add(app.view)

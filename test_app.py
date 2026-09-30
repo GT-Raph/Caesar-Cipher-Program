@@ -2,6 +2,7 @@ import base64
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
+import flet as ft
 
 from src.cipher_vault.app import VaultApp, main
 
@@ -9,7 +10,10 @@ from src.cipher_vault.app import VaultApp, main
 class AppTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.page = Mock()
+        self.page.web = False
+        self.page.platform = ft.PagePlatform.ANDROID
         self.app = VaultApp(self.page)
+        self.app.confirm_discard = AsyncMock(return_value=True)
         self.app.picker = SimpleNamespace(pick_files=AsyncMock(), save_file=AsyncMock(return_value='saved'))
         self.app.password.value = self.app.confirm.value = 'test passphrase for vault'
 
@@ -82,3 +86,54 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
     def test_main_constructs_current_flet_controls(self):
         main(self.page)
         self.page.add.assert_called_once()
+
+    async def test_input_edits_preserve_unsaved_result(self):
+        app = self.app
+        app.result_data = b'keep this'
+        app.result.value = 'keep this'
+        app.result_saved = False
+        app.changed()
+        self.assertEqual(app.result_data, b'keep this')
+        self.assertFalse(app.save_button.disabled)
+        app.confirm_discard.return_value = False
+        await app.clear()
+        self.assertEqual(app.result_data, b'keep this')
+        await app.process()
+        self.assertEqual(app.result_data, b'keep this')
+
+    async def test_keys_remain_unsaved_until_both_exports_succeed(self):
+        app = self.app
+        app.generated_keys = (b'private', b'public')
+        await app.save_public()
+        self.assertTrue(app.unsaved)
+        app.picker.save_file.return_value = None
+        await app.save_private()
+        self.assertTrue(app.unsaved)
+        app.picker.save_file.return_value = 'saved'
+        await app.save_private()
+        self.assertFalse(app.unsaved)
+
+    async def test_close_blocked_during_work_and_for_unsaved_result(self):
+        app = self.app
+        self.page.window.destroy = AsyncMock()
+        event = SimpleNamespace(type=ft.WindowEventType.CLOSE)
+        app.busy = True
+        await app.close_window(event)
+        self.page.window.destroy.assert_not_awaited()
+        app.busy = False
+        app.generated_keys = (b'private', b'public')
+        app.confirm_discard.return_value = False
+        await app.close_window(event)
+        self.page.window.destroy.assert_not_awaited()
+
+    def test_web_mode_refuses_to_handle_secrets(self):
+        self.page.web = True
+        main(self.page)
+        self.assertIn('native local', self.page.add.call_args.args[0].value)
+
+    async def test_empty_mobile_export_reaches_native_api(self):
+        from src.cipher_vault.native_files import save_mobile_bytes
+        picker = SimpleNamespace(save_file=AsyncMock(), _invoke_method=AsyncMock(return_value='saved'))
+        self.assertEqual(await save_mobile_bytes(picker, 'empty.bin', b''), 'saved')
+        self.assertEqual(picker._invoke_method.call_args.args[1]['src_bytes'], b'')
+        picker.save_file.assert_not_awaited()

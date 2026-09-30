@@ -2,6 +2,8 @@
 
 A Flet desktop/mobile encryption app with a Python `cryptography` engine. The old letter-shifting cipher and Tkinter interface have been removed.
 
+**Release candidate 0.3.0:** hardening is in progress; see [release status and blockers](RELEASE_STATUS.md) before distribution. This is not yet approved for production use across all four platforms.
+
 ## Run on Windows
 
 ```powershell
@@ -55,18 +57,18 @@ flet build ipa
 
 Windows builds require the Windows/Flutter build prerequisites. Android requires the Android SDK/JDK and release signing for distribution. macOS/iOS builds require macOS and the Apple toolchain; iOS distribution also requires signing. See [Flet publishing](https://flet.dev/docs/publish/), [Android packaging](https://flet.dev/docs/publish/android/), and [iOS packaging](https://flet.dev/docs/publish/ios/).
 
-**Build status:** source code and automated tests are provided. No Windows installer, APK, macOS app, or IPA has been built or device-tested in this migration. Flet packaging must resolve compatible native `cryptography` wheels for each target Python version and architecture; desktop pip installation alone does not verify this. Test file import/export, application lifecycle, memory use, and encryption on real devices before distribution.
+**Build status:** see [RELEASE_STATUS.md](RELEASE_STATUS.md) for current evidence. Every platform pins `cryptography==50.0.1`. The older 48.0.0 mobile wheels available from the Flet index failed vulnerability auditing; Android/iOS builds need compatible patched native wheels before release. Desktop pip installation alone does not verify mobile compatibility.
 
-The UI uses responsive rows, scrolling, safe-area padding, masked passphrase fields, and background cryptographic tasks. Native file pickers read and save bytes, so Android/iOS do not need desktop filesystem paths. The picker may load a whole file before the application can enforce its limit. This project targets native local execution; do not host it as a remote web service without redesigning its privacy and transport assumptions.
+The UI uses responsive rows, scrolling, safe-area padding, masked passphrase fields, and background cryptographic tasks. Desktop reads are bounded before loading a file. Android/iOS pickers use bytes without desktop paths, but may load a whole file before the application can enforce its limit. The app refuses web mode to keep secrets out of a remote Python server.
 
 ## Limits and security scope
 
 - New plaintext files are limited to 16 MiB for mobile memory use; selected encrypted files are limited to 24 MiB. Older hybrid files beyond that UI limit can still be read through the hybrid Python engine, whose original limits remain intact.
 - Text mode accepts up to 250,000 plaintext characters. Use file mode for larger messages.
 - Whole files and results are held in memory; this is not streaming encryption.
-- Native save dialogs handle destinations and overwrite confirmation. Choose a new output filename to preserve your originals.
-- **Clear workspace** removes the application's references to passwords, messages, files, and generated keys. It is destructive; save your work first. Python and the UI runtime do not guarantee memory zeroization.
-- Data is not persisted automatically. Closing the app or the mobile OS terminating it loses unsaved results and generated keys. Do not close during an operation.
+- Desktop exports flush to a temporary file and atomically publish to a new filename. Existing files are never replaced; destinations without hard-link support are rejected. Mobile save durability and overwrite behavior are controlled by the native document provider.
+- Input changes retain the previous result. Replacing an unsaved result or clearing unsaved output/keys requires confirmation. **Clear workspace** removes application references, but Python and the UI runtime do not guarantee memory zeroization.
+- Desktop close prompts protect unsaved results/keys and prevent closing during an operation. Mobile process termination can still lose unsaved data; save results and keys promptly.
 - Authentication detects modifications; it cannot prevent deletion or replacement with another valid encrypted file. File names, approximate sizes, and Fernet timestamps are not hidden.
 - This is an application prototype using established cryptographic primitives, not an independently audited production security product.
 
@@ -84,3 +86,6 @@ References: [Fernet and password key derivation](https://cryptography.io/en/late
 - `test_password_crypto.py`: round trips, salts, tampering, malformed data, and input limits.
 - `test_hybrid_crypto.py`: hybrid authentication and key validation.
 - `test_app.py`: Flet control construction and event-handler tests with mocked native dialogs; these are not end-to-end device tests.
+- `test_storage.py`: interrupted desktop exports, non-overwrite guarantees, and bounded reads.
+- `.github/workflows/verify.yml`: cross-platform tests and dependency audits.
+- `.github/workflows/build-candidates.yml`: manual unsigned candidate builds, including the iOS simulator.

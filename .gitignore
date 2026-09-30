@@ -7,3 +7,13 @@ caesar-keys-*/
 *.cvlt
 build/
 dist/
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.mobileprovision
+.env
+.env.*
+!.env.example
+decrypted-*
+dependency-audit.json

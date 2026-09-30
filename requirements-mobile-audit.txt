@@ -1,0 +1,2 @@
+# The audited minimum release pin. Do not downgrade to the older Flet wheel.
+cryptography==50.0.1

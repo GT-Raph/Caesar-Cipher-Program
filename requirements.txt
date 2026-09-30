@@ -1,2 +1,2 @@
-cryptography>=46.0.0,<52
+cryptography==50.0.1
 flet[all]==1.0.3
