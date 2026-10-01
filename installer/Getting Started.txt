@@ -1,0 +1,22 @@
+Cipher Vault 0.3.1 - Windows test release
+
+Open Cipher Vault from the Start menu. Python is included; you do not need
+to install Python separately. Windows 10/11, 64-bit, is required.
+
+Password encryption:
+1. Choose Password and Encrypt.
+2. Enter text or select File and choose a file (up to 16 MiB).
+3. Create and confirm a strong passphrase, or generate one and store it safely.
+4. Encrypt, then Save result. Keep your passphrase separately.
+5. To open a saved .cvlt file, select File and Decrypt with the same passphrase.
+
+Public key encryption uses AES + RSA. Exchange public keys only. Verify the
+recipient's full fingerprint over a separate trusted channel. Keep private
+keys and their passphrases safe. There is no password or key recovery service.
+
+Store your files and keys in your own Documents folder, outside the app's
+installation folder. Uninstall through Windows Settings > Apps.
+
+This is an unsigned test release. Native UI testing and an independent
+security assessment remain outstanding. Try copies of non-sensitive files
+first and retain backups. Do not disable Windows security protections.

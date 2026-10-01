@@ -5,7 +5,7 @@ from src.cipher_vault import password_crypto as crypto
 
 
 class PasswordTests(unittest.TestCase):
-    password = 'correct horse battery staple'
+    password = 'violet telescope harbor 73'
 
     def test_binary_empty_and_unicode_round_trips(self):
         for data in (b'', bytes(range(256)), 'Hello café 中文'.encode()):

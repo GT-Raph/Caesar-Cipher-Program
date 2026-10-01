@@ -1,8 +1,7 @@
 ﻿"""Compatibility launcher for the original program filename."""
 
-import flet as ft
-from src.cipher_vault.app import main
+from src.cipher_vault.launcher import run
 
 
 if __name__ == '__main__':
-    ft.run(main)
+    run()

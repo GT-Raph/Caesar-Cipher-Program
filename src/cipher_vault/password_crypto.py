@@ -7,6 +7,7 @@ import struct
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from .passphrases import validate_new
 
 MAGIC = b'CVLT\x01'
 ITERATIONS = 1_200_000
@@ -30,8 +31,10 @@ def derive_key(password: str, salt: bytes) -> bytes:
 
 
 def encrypt(data: bytes, password: str) -> bytes:
-    if len(password) < 12:
-        raise EncryptionError('Use a passphrase with at least 12 characters.')
+    try:
+        validate_new(password)
+    except ValueError as error:
+        raise EncryptionError(str(error)) from error
     if len(data) > MAX_DATA:
         raise EncryptionError('Files must be 16 MiB or smaller.')
     salt = os.urandom(SALT_SIZE)

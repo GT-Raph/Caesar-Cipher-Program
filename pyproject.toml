@@ -1,6 +1,6 @@
 [project]
 name = "cipher-vault"
-version = "0.3.0"
+version = "0.3.1"
 description = "Local password and public-key file encryption"
 requires-python = ">=3.10"
 dependencies = [

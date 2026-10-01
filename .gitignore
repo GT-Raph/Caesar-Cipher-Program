@@ -1,6 +1,10 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-release/
+.python/
+.tools/
+*.spec
 *.pem
 *.cse
 caesar-keys-*/

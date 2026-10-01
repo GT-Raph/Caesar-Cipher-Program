@@ -1,7 +1,7 @@
 import base64
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 import flet as ft
 
 from src.cipher_vault.app import VaultApp, main
@@ -24,6 +24,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         encrypted = app.result.value
         self.assertEqual(base64.b64decode(encrypted), app.result_data)
         app.operation.value = 'decrypt'
+        app.password.value = 'test passphrase for vault'
         app.message.value = encrypted
         app.changed()
         await app.process()
@@ -76,10 +77,13 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         await app.process()
         self.assertIn('Verify', app.status.value)
         app.verified.value = True
+        from src.cipher_vault.hybrid_crypto import fingerprint, public_key
+        app.expected_fingerprint.value = fingerprint(public_key(public))
         await app.process()
         app.message.value = app.result.value
         app.operation.value = 'decrypt'
         app.key_data = private
+        app.password.value = 'test passphrase for vault'
         await app.process()
         self.assertEqual(app.result.value, 'hybrid test')
 
@@ -137,3 +141,56 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await save_mobile_bytes(picker, 'empty.bin', b''), 'saved')
         self.assertEqual(picker._invoke_method.call_args.args[1]['src_bytes'], b'')
         picker.save_file.assert_not_awaited()
+
+    async def test_passphrases_forgotten_on_success_and_background(self):
+        app = self.app
+        app.message.value = 'synthetic secret'
+        await app.process()
+        self.assertEqual(app.password.value, '')
+        self.assertEqual(app.confirm.value, '')
+        output = app.result_data
+        app.password.value = 'temporary passphrase'
+        await app.lifecycle(SimpleNamespace(state=ft.AppLifecycleState.PAUSE))
+        self.assertEqual(app.password.value, '')
+        self.assertFalse(app.view.visible)
+        self.assertEqual(app.result_data, output)
+        await app.lifecycle(SimpleNamespace(state=ft.AppLifecycleState.RESUME))
+        self.assertTrue(app.view.visible)
+        self.assertEqual(app.password.value, '')
+
+    async def test_generated_passphrase_requires_storage_confirmation(self):
+        app = self.app
+        await app.new_passphrase()
+        self.assertEqual(len(app.password.value), 32)
+        await app.process()
+        self.assertIsNone(app.result_data)
+        self.assertIn('Store the generated', app.status.value)
+        app.passphrase_saved.value = True
+        await app.process()
+        self.assertIsNotNone(app.result_data)
+        self.assertIsNone(app.generated_passphrase)
+
+    async def test_checked_box_does_not_bypass_fingerprint_match(self):
+        from src.cipher_vault.hybrid_crypto import generate_keypair
+        _, public = generate_keypair('a synthetic long passphrase')
+        app = self.app
+        app.method.value = 'hybrid'
+        app.key_data = public
+        app.verified.value = True
+        app.expected_fingerprint.value = '0' * 64
+        await app.process()
+        self.assertIsNone(app.result_data)
+        self.assertIn('does not match', app.status.value)
+
+    async def test_background_during_crypto_does_not_reveal_result(self):
+        app = self.app
+
+        async def worker(*args):
+            await app.lifecycle(SimpleNamespace(state=ft.AppLifecycleState.PAUSE))
+            return b'encrypted test output'
+
+        with patch('src.cipher_vault.app.asyncio.to_thread', side_effect=worker):
+            await app.process()
+        self.assertFalse(app.view.visible)
+        self.assertEqual(app.password.value, '')
+        self.assertIsNotNone(app.result_data)

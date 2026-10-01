@@ -10,6 +10,7 @@ from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from .passphrases import validate_new
 
 MAX_DATA = 64 * 1024 * 1024
 MAX_ENVELOPE = 90 * 1024 * 1024
@@ -42,10 +43,10 @@ def fingerprint(key):
 
 
 def generate_keypair(password):
-    if len(password) < 12:
-        raise CryptoError('Use a private-key passphrase of at least 12 characters.')
-    if len(password.encode('utf-8')) > 1023:
-        raise CryptoError('Private-key passphrases must be at most 1023 UTF-8 bytes.')
+    try:
+        validate_new(password, max_bytes=1023)
+    except ValueError as error:
+        raise CryptoError(str(error)) from error
     key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                 serialization.BestAvailableEncryption(password.encode('utf-8')))
